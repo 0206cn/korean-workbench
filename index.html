@@ -1596,6 +1596,7 @@ if(IS_WECHAT){
 const EDGE_TOKEN='6A5AA1D4EAFF4E9FB37E23D68491D6F4';
 const EDGE_VER='1-130.0.2849.68';
 let netAudio=null,netQue=[],netBusy=false,netWsFail=false,_acCtx=null,_silentAudio=null;
+const IS_MOBILE=/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 function uuidv4(){
   try{return (crypto.randomUUID?crypto.randomUUID():([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,c=>(c^crypto.getRandomValues(new Uint8Array(1))[0]&15>>c/4).toString(16)));}
   catch(e){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16);});}
@@ -1697,7 +1698,8 @@ function edgeTts(text,cb){
   else{
     wsOpen();
     clearTimeout(wsTimeout);
-    wsTimeout=setTimeout(function(){if(wsCb){const c=wsCb;wsCb=null;c(false);}},2500);
+    // 手机端 Edge wss 常受限：超时缩短，快速切百度兜底
+    wsTimeout=setTimeout(function(){if(wsCb){const c=wsCb;wsCb=null;c(false);}},IS_MOBILE?1200:2500);
   }
 }
 function playEdgeAudio(b64,cb){
@@ -1720,7 +1722,26 @@ function playEdgeAudio(b64,cb){
 }
 function netHttpFallback(t,cb){
   unlockTTS();
-  // 国内可直连优先（百度），境外 Google 兜底；fetch→blob 播放跨域更可靠
+  // 长文本切分（>60 字分段），逐段播放
+  const chunks=[];let cur='';
+  const parts=String(t).match(/[^.!?，。！？、\s]+[.!?，。！？、]?|\s+/g)||[String(t)];
+  parts.forEach(function(p){
+    if(!p.trim())return;
+    if((cur+p.trim()).length>60){if(cur)chunks.push(cur);cur=p.trim();}
+    else cur+=p.trim();
+  });
+  if(cur)chunks.push(cur);
+  if(!chunks.length)chunks.push(String(t));
+  let ci=0;
+  const playOne=function(){
+    if(ci>=chunks.length){cb(true);return;}
+    httpSpeakOne(chunks[ci++],function(ok){if(!ok){cb(false);return;}playOne();});
+  };
+  playOne();
+}
+function httpSpeakOne(t,cb){
+  // 国内可直连优先（百度），境外 Google 兜底。
+  // 注意：用 <audio> 直接播放 URL（跨域媒体播放不需要 CORS）；fetch 会被 CORS 拦截。
   const urls=[
     'https://fanyi.baidu.com/gettts?lan=kor&text='+encodeURIComponent(t)+'&spd=3&source=web',
     'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=ko&q='+encodeURIComponent(t)
@@ -1730,26 +1751,16 @@ function netHttpFallback(t,cb){
   const tryOne=function(){
     if(done)return;
     clearTimeout(timer);
-    timer=setTimeout(function(){ // 6 秒无响应 → 下一源
-      try{fetchAbort&&fetchAbort.abort();}catch(e){}
+    timer=setTimeout(function(){ // 5 秒无响应 → 下一源
+      try{netAudio.pause();}catch(e){}
       next();
-    },6000);
-    let fetchAbort=null;
-    try{fetchAbort=new AbortController();}catch(e){}
-    const opt={signal:fetchAbort?fetchAbort.signal:undefined};
-    fetch(urls[i],opt).then(function(r){
-      if(!r.ok)throw new Error('HTTP '+r.status);
-      return r.blob();
-    }).then(function(blob){
-      if(done)return;
-      if(!netAudio)netAudio=new Audio();
-      const url=URL.createObjectURL(blob);
-      netAudio.src=url;
-      netAudio.onended=function(){if(done)return;done=true;clearTimeout(timer);try{URL.revokeObjectURL(url);}catch(e){}cb(true);};
-      netAudio.onerror=function(){try{URL.revokeObjectURL(url);}catch(e){}next();};
-      const p=netAudio.play();
-      if(p&&p.catch)p.catch(function(){try{URL.revokeObjectURL(url);}catch(e){}next();});
-    }).catch(function(){next();});
+    },5000);
+    if(!netAudio){try{netAudio=new Audio();}catch(e){fail();return;}}
+    netAudio.onerror=function(){try{netAudio.pause();}catch(e){}next();};
+    netAudio.onended=function(){if(done)return;done=true;clearTimeout(timer);cb(true);};
+    netAudio.src=urls[i];
+    const p=netAudio.play();
+    if(p&&p.catch)p.catch(function(){try{netAudio.pause();}catch(e){}next();});
   };
   const next=function(){i++;if(i<urls.length)tryOne();else fail();};
   tryOne();
@@ -1832,18 +1843,24 @@ function speak(text){
   if(store.set.ttsMode===1){sysSpeak(text);return;}
   // 微信内置浏览器：WebSocket 音频常被静音/阻断，直接走系统语音（有韩语包时）
   if(IS_WECHAT&&koVoice&&('speechSynthesis' in window)){sysSpeak(text);return;}
+  // 手机浏览器：Edge wss 常被网络/内核限制，直接走国内可直连的百度 TTS（audio 播放无需 CORS）
+  if(IS_MOBILE&&netWsFail){
+    netHttpFallback(text,function(){});
+    return;
+  }
   netSpeak(text);
 }
 /* 发音通道自检：显示各环节状态，便于定位手机无声原因 */
 function ttsDiag(){
   const lines=[];
-  lines.push('浏览器类型：'+(IS_WECHAT?'微信内置':'普通浏览器')+(IS_IOS?'（iOS）':''));
+  lines.push('浏览器类型：'+(IS_WECHAT?'微信内置':(IS_MOBILE?'手机浏览器':'电脑'))+(IS_IOS?'（iOS）':''));
   lines.push('系统韩语语音：'+(koVoice?(koVoice.name||'有'):'❌ 无（小米等系统常缺）'));
-  lines.push('在线 Edge TTS：'+(netWsFail?'❌ 上次连接失败（可能被网络限制）':'待测/正常'));
+  lines.push('在线 Edge TTS：'+(netWsFail?'❌ 上次连接失败（已自动用百度兜底）':'待测'));
+  lines.push('百度兜底（国内直连）：✅ 已启用');
   lines.push('WebSocket 支持：'+('WebSocket' in window?'✅':'❌'));
   lines.push('音频播放：'+((window.AudioContext||window.webkitAudioContext)?'✅ 支持':'⚠️ 不支持'));
-  lines.push('当前发音引擎：'+(store.set.ttsMode===1?'系统语音':'在线韩语语音'));
-  showModal('发音自检', lines.join('<br>'), function(){toast('若无声：①点右上角⋯用浏览器打开 ②确认手机音量 ③试听系统语音');});
+  lines.push('当前发音引擎：'+(store.set.ttsMode===1?'系统语音':(IS_MOBILE&&netWsFail?'百度兜底':'在线韩语语音')));
+  showModal('发音自检', lines.join('<br>'), function(){toast('若无声：①确认手机音量 ②换 Chrome 试试 ③百度若被网络拦截则需系统语音包');});
 }
 function sysSpeak(text){
   if(!text)return;
