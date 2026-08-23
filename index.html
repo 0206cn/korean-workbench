@@ -1751,13 +1751,16 @@ function netHttpFallback(t,cb){
 function httpSpeakOne(t,cb){
   // 发音源：
   // ① 同源 /tts 代理（本地服务器模式：服务端转发，音频同源 → 解决小米浏览器跨域静音）
-  // ② 有道（加载稳定）③ 百度（能读整句）④ Google（兜底）
-  const urls=[
-    location.origin+'/tts?text='+encodeURIComponent(t),
-    'https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(t)+'&type=2',
-    'https://fanyi.baidu.com/gettts?lan=kor&text='+encodeURIComponent(t)+'&spd=3&source=web',
-    'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=ko&q='+encodeURIComponent(t)
-  ];
+  // ② 有道（短词稳定，但读不了整句）③ 百度（能读整句）④ Google（兜底）
+  const isShort=!/\s/.test(t)&&t.length<=12; // 单词 → 有道优先；句子 → 百度优先
+  const urls=isShort
+    ?[location.origin+'/tts?text='+encodeURIComponent(t),
+      'https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(t)+'&type=2',
+      'https://fanyi.baidu.com/gettts?lan=kor&text='+encodeURIComponent(t)+'&spd=3&source=web']
+    :[location.origin+'/tts?text='+encodeURIComponent(t),
+      'https://fanyi.baidu.com/gettts?lan=kor&text='+encodeURIComponent(t)+'&spd=3&source=web',
+      'https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(t)+'&type=2'];
+  urls.push('https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=ko&q='+encodeURIComponent(t));
   let i=0,timer=0,done=false;
   const fail=function(){if(done)return;done=true;clearTimeout(timer);cb(false);};
   const tryOne=function(){
