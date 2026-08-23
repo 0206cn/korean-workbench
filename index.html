@@ -512,6 +512,7 @@ button{touch-action:manipulation !important;}
       <div class="set-row"><span>发音引擎</span><select id="set-ttsmode" onchange="saveSettings()"><option value="0" selected>在线韩语语音（推荐，清晰标准）</option><option value="1">系统韩语语音</option></select></div>
       <div class="set-row"><span>发音音色</span><select id="set-voice" onchange="saveSettings()"><option value="0" selected>SunHi 女声（推荐）</option><option value="1">InJoon 男声</option></select></div>
       <div class="set-row"><span>测试发音</span><button class="btn" style="width:auto;padding:8px 14px;font-size:12px" onclick="speak('안녕하세요, 오늘도 화이팅!')">🔊 试听</button></div>
+      <div class="set-row"><span>发音自检</span><button class="btn" style="width:auto;padding:8px 14px;font-size:12px;color:var(--orange);background:var(--orange-dim)" onclick="ttsDiag()">🩺 检查发音通道</button></div>
       <div class="set-row" style="border-top:1px solid var(--border);padding-top:14px;margin-top:6px"><span class="danger">重置全部进度</span><button class="btn" style="width:auto;padding:8px 14px;font-size:12px;color:var(--red);background:var(--red-dim)" onclick="resetAll()">重置</button></div>
     </div>
     <!-- 账号与云同步 -->
@@ -1701,15 +1702,20 @@ function edgeTts(text,cb){
 }
 function playEdgeAudio(b64,cb){
   try{
+    unlockTTS(); // 确保 Audio 上下文已解锁（手机浏览器必须）
     const bin=atob(b64);
     const bytes=new Uint8Array(bin.length);
     for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
     if(!netAudio)netAudio=new Audio();
     const url=URL.createObjectURL(new Blob([bytes],{type:'audio/mpeg'}));
     netAudio.src=url;
-    netAudio.onended=function(){try{URL.revokeObjectURL(url);}catch(e){}cb(true);};
-    netAudio.onerror=function(){try{URL.revokeObjectURL(url);}catch(e){}cb(false);};
-    netAudio.play().catch(function(){try{URL.revokeObjectURL(url);}catch(e){}cb(false);});
+    const fin=function(ok){try{URL.revokeObjectURL(url);}catch(e){}if(ok!==false)cb(true);};
+    netAudio.onended=function(){fin(true);};
+    netAudio.onerror=function(){fin(false);};
+    const p=netAudio.play();
+    if(p&&p.catch)p.catch(function(){ // 自动播放被拒 → 再尝试一次（已解锁过应成功）
+      try{const p2=netAudio.play();if(p2&&p2.catch)p2.catch(function(){fin(false);});}catch(e){fin(false);}
+    });
   }catch(e){cb(false);}
 }
 function netHttpFallback(t,cb){
@@ -1812,6 +1818,17 @@ function speak(text){
   // 微信内置浏览器：WebSocket 音频常被静音/阻断，直接走系统语音（有韩语包时）
   if(IS_WECHAT&&koVoice&&('speechSynthesis' in window)){sysSpeak(text);return;}
   netSpeak(text);
+}
+/* 发音通道自检：显示各环节状态，便于定位手机无声原因 */
+function ttsDiag(){
+  const lines=[];
+  lines.push('浏览器类型：'+(IS_WECHAT?'微信内置':'普通浏览器')+(IS_IOS?'（iOS）':''));
+  lines.push('系统韩语语音：'+(koVoice?(koVoice.name||'有'):'❌ 无（小米等系统常缺）'));
+  lines.push('在线 Edge TTS：'+(netWsFail?'❌ 上次连接失败（可能被网络限制）':'待测/正常'));
+  lines.push('WebSocket 支持：'+('WebSocket' in window?'✅':'❌'));
+  lines.push('音频播放：'+((window.AudioContext||window.webkitAudioContext)?'✅ 支持':'⚠️ 不支持'));
+  lines.push('当前发音引擎：'+(store.set.ttsMode===1?'系统语音':'在线韩语语音'));
+  showModal('发音自检', lines.join('<br>'), function(){toast('若无声：①点右上角⋯用浏览器打开 ②确认手机音量 ③试听系统语音');});
 }
 function sysSpeak(text){
   if(!text)return;
@@ -3656,6 +3673,17 @@ function authGate(){
     enterApp();
     return;
   }
+  // 监听登录态变化（含 token 刷新），实时更新界面
+  _supa.auth.onAuthStateChange(function(event,session){
+    if(session&&session.user&&!_supaUser){
+      _supaUser=session.user;
+      syncPull();
+      supaShow();
+      enterApp();
+    }else if(!session&&_supaUser){
+      _supaUser=null;
+    }
+  });
   _supa.auth.getSession().then(({data})=>{
     if(data&&data.session&&data.session.user){
       _supaUser=data.session.user;
