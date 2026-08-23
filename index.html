@@ -1551,12 +1551,21 @@ function unlockTTS(){
   wsOpen(); // 用户首次交互时预连接在线语音，保证点击即出声
   if(_ttsUnlocked)return;
   _ttsUnlocked=true;
-  // 微信内核 / iOS：必须先解锁 Audio 上下文，否则后续播放全部静音
+  // 手势栈内创建并 resume AudioContext，再用它播放极短真实音频（Android Chrome/小米最认的解锁方式）
   try{
     if(window.AudioContext||window.webkitAudioContext){
       const AC=window.AudioContext||window.webkitAudioContext;
       if(!_acCtx)_acCtx=new AC();
-      if(_acCtx&&_acCtx.state==='suspended')_acCtx.resume();
+      const ctx=_acCtx;
+      if(ctx.state==='suspended'){try{ctx.resume();}catch(e){}}
+      try{
+        const len=Math.floor(ctx.sampleRate*0.03); // 30ms 极短
+        const buf=ctx.createBuffer(1,len,ctx.sampleRate);
+        const data=buf.getChannelData(0);
+        for(let i=0;i<len;i++)data[i]=0; // 纯静音缓冲，仅用于解锁
+        const src=ctx.createBufferSource();
+        src.buffer=buf;src.connect(ctx.destination);src.start(0);
+      }catch(e){}
     }
   }catch(e){}
   try{
@@ -1741,7 +1750,8 @@ function netHttpFallback(t,cb){
 }
 function httpSpeakOne(t,cb){
   // 国内可直连优先（百度），境外 Google 兜底。
-  // 注意：用 <audio> 直接播放 URL（跨域媒体播放不需要 CORS）；fetch 会被 CORS 拦截。
+  // 用 <audio> 直接播放 URL（跨域媒体播放不需要 CORS）；fetch 会被 CORS 拦截。
+  // 关键：在用户手势调用栈内立即 play()（手机浏览器自动播放策略要求）
   const urls=[
     'https://fanyi.baidu.com/gettts?lan=kor&text='+encodeURIComponent(t)+'&spd=3&source=web',
     'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=ko&q='+encodeURIComponent(t)
@@ -1759,7 +1769,8 @@ function httpSpeakOne(t,cb){
     netAudio.onerror=function(){try{netAudio.pause();}catch(e){}next();};
     netAudio.onended=function(){if(done)return;done=true;clearTimeout(timer);cb(true);};
     netAudio.src=urls[i];
-    const p=netAudio.play();
+    netAudio.load(); // 同步触发加载，保证 play 紧跟
+    const p=netAudio.play(); // 手势栈内立即 play
     if(p&&p.catch)p.catch(function(){try{netAudio.pause();}catch(e){}next();});
   };
   const next=function(){i++;if(i<urls.length)tryOne();else fail();};
