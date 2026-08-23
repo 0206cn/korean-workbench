@@ -1720,28 +1720,39 @@ function playEdgeAudio(b64,cb){
 }
 function netHttpFallback(t,cb){
   unlockTTS();
-  if(!netAudio){try{netAudio=new Audio();}catch(e){cb(false);return;}}
-  // 国内可直连优先（百度），境外 Google 兜底
+  // 国内可直连优先（百度），境外 Google 兜底；fetch→blob 播放跨域更可靠
   const urls=[
     'https://fanyi.baidu.com/gettts?lan=kor&text='+encodeURIComponent(t)+'&spd=3&source=web',
     'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=ko&q='+encodeURIComponent(t)
   ];
-  let i=0,timer=0;
-  const tryPlay=function(){
+  let i=0,timer=0,done=false;
+  const fail=function(){if(done)return;done=true;clearTimeout(timer);cb(false);};
+  const tryOne=function(){
+    if(done)return;
     clearTimeout(timer);
-    timer=setTimeout(function(){ // 4 秒无响应 → 跳过该源（防止网络挂起导致长时间无声音）
-      netAudio.onerror=null;netAudio.onended=null;
-      try{netAudio.pause();}catch(e){}
+    timer=setTimeout(function(){ // 6 秒无响应 → 下一源
+      try{fetchAbort&&fetchAbort.abort();}catch(e){}
       next();
-    },4000);
-    netAudio.onerror=function(){netAudio.onerror=null;clearTimeout(timer);next();};
-    netAudio.onended=function(){netAudio.onended=null;clearTimeout(timer);cb(true);};
-    netAudio.src=urls[i];
-    const p=netAudio.play();
-    if(p&&p.catch)p.catch(function(){clearTimeout(timer);next();});
+    },6000);
+    let fetchAbort=null;
+    try{fetchAbort=new AbortController();}catch(e){}
+    const opt={signal:fetchAbort?fetchAbort.signal:undefined};
+    fetch(urls[i],opt).then(function(r){
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      return r.blob();
+    }).then(function(blob){
+      if(done)return;
+      if(!netAudio)netAudio=new Audio();
+      const url=URL.createObjectURL(blob);
+      netAudio.src=url;
+      netAudio.onended=function(){if(done)return;done=true;clearTimeout(timer);try{URL.revokeObjectURL(url);}catch(e){}cb(true);};
+      netAudio.onerror=function(){try{URL.revokeObjectURL(url);}catch(e){}next();};
+      const p=netAudio.play();
+      if(p&&p.catch)p.catch(function(){try{URL.revokeObjectURL(url);}catch(e){}next();});
+    }).catch(function(){next();});
   };
-  const next=function(){i++;if(i<urls.length)tryPlay();else cb(false);};
-  tryPlay();
+  const next=function(){i++;if(i<urls.length)tryOne();else fail();};
+  tryOne();
 }
 function netSpeak(text){
   if(!text)return;
@@ -3546,7 +3557,7 @@ async function acctSignup(){
   try{
     const {data,error}=await _supa.auth.signUp({email,password:pass});
     if(error){toast('注册失败：'+(error.message||'').slice(0,40));return;}
-    if(data.session){_supaUser=data.session.user;toast('注册成功，已登录');await syncPull();}
+    if(data.session){_supaUser=data.session.user;toast('注册成功，已登录');markLoggedIn();await syncPull();}
     else{toast('注册成功！请到邮箱点击确认链接后再登录');}
     supaShow();
   }catch(e){toast('网络错误，请重试');}
@@ -3565,6 +3576,7 @@ async function acctLogin(){
 async function acctLogout(){
   try{await _supa.auth.signOut();}catch(e){}
   _supaUser=null;
+  clearLoggedIn(); // 清除本地登录标记，下次需重新登录
   document.getElementById('v-auth').classList.add('active');
   document.getElementById('nav').style.display='none';
   supaShow();
@@ -3627,6 +3639,7 @@ async function authSignup(){
     if(data.session){
       _supaUser=data.session.user;
       toast('注册成功，已登录');
+      markLoggedIn();
       await syncPull();
       enterApp();
     }else{
@@ -3645,6 +3658,7 @@ async function authLogin(){
     if(error){authErr('登录失败：'+(error.message||'').slice(0,50));return;}
     _supaUser=data.user;
     toast('登录成功');
+    markLoggedIn();
     await syncPull();
     enterApp();
   }catch(e){authErr('网络错误，请重试');}
@@ -3660,6 +3674,9 @@ function enterApp(){
   supaShow();
   goNav('home');
 }
+/* 记住"已登录过"标记（仅用于同一地址刷新时跳过登录页；安全由 Supabase 会话校验兜底） */
+function markLoggedIn(){try{localStorage.setItem('kr_logged','1');}catch(e){}}
+function clearLoggedIn(){try{localStorage.removeItem('kr_logged');}catch(e){}}
 
 /* ================= 启动 ================= */
 loadStore();
@@ -3677,22 +3694,35 @@ function authGate(){
     enterApp();
     return;
   }
+  // 本地记住的登录标记：同一地址刷新时直接进首页（会话有效性由 Supabase 校验）
+  let hadLocal=false;
+  try{hadLocal=localStorage.getItem('kr_logged')==='1';}catch(e){}
   // 监听登录态变化（含 token 刷新），实时更新界面
   _supa.auth.onAuthStateChange(function(event,session){
     if(session&&session.user&&!_supaUser){
       _supaUser=session.user;
+      markLoggedIn();
       syncPull();
       supaShow();
       enterApp();
     }else if(!session&&_supaUser){
       _supaUser=null;
+    }else if(!session&&!hadLocal){
+      // 会话失效且无本地标记 → 回登录页
+      document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+      document.getElementById('v-auth').classList.add('active');
+      document.getElementById('nav').style.display='none';
     }
   });
   _supa.auth.getSession().then(({data})=>{
     if(data&&data.session&&data.session.user){
       _supaUser=data.session.user;
+      markLoggedIn();
       syncPull(); // 登录过 → 拉取云端进度合并
       supaShow();
+      enterApp();
+    }else if(hadLocal){
+      // 有本地标记但云端会话没了（可能过期/被清）→ 静默进首页，后台刷新会话失败则下次登录
       enterApp();
     }else{
       // 未登录 → 全屏登录页（盖住首页）
@@ -3701,10 +3731,13 @@ function authGate(){
       document.getElementById('nav').style.display='none';
     }
   }).catch(()=>{
-    // 断网等异常：进登录页
-    document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
-    document.getElementById('v-auth').classList.add('active');
-    document.getElementById('nav').style.display='none';
+    // 断网等异常：有本地标记直接进，否则登录页
+    if(hadLocal){enterApp();}
+    else{
+      document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+      document.getElementById('v-auth').classList.add('active');
+      document.getElementById('nav').style.display='none';
+    }
   });
 }
 window.addEventListener('load',()=>{setTimeout(authGate,300);setTimeout(supaShow,400);});
