@@ -21,6 +21,7 @@ body{font-family:"PingFang SC","Microsoft YaHei","Segoe UI",sans-serif;backgroun
 /* 手机适配：禁长按选中/菜单、优化点击响应 */
 html{-webkit-text-size-adjust:100%;}
 button,input,textarea{-webkit-user-select:none;user-select:none;touch-action:manipulation;}
+button{touch-action:manipulation !important;}
 #shell{-webkit-user-select:none;user-select:none;}
 #shell input,#shell textarea{-webkit-user-select:text;user-select:text;}
 #shell{max-width:430px;margin:0 auto;min-height:100vh;min-height:100dvh;background:var(--bg);position:relative;display:flex;flex-direction:column;}
@@ -1543,11 +1544,27 @@ if('speechSynthesis' in window){speechSynthesis.onvoiceschanged=pickVoice;setTim
 
 /* ---- 移动端音频解锁：浏览器要求首次发音必须由用户手势触发 ---- */
 const IS_IOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+const IS_WECHAT=/MicroMessenger/i.test(navigator.userAgent); // 微信内置浏览器
 let _ttsUnlocked=false;
 function unlockTTS(){
   wsOpen(); // 用户首次交互时预连接在线语音，保证点击即出声
-  if(_ttsUnlocked||!('speechSynthesis' in window))return;
+  if(_ttsUnlocked)return;
   _ttsUnlocked=true;
+  // 微信内核 / iOS：必须先解锁 Audio 上下文，否则后续播放全部静音
+  try{
+    if(window.AudioContext||window.webkitAudioContext){
+      const AC=window.AudioContext||window.webkitAudioContext;
+      if(!_acCtx)_acCtx=new AC();
+      if(_acCtx&&_acCtx.state==='suspended')_acCtx.resume();
+    }
+  }catch(e){}
+  try{
+    if(!_silentAudio)_silentAudio=new Audio();
+    _silentAudio.src='data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAACAgICA';
+    _silentAudio.volume=0;
+    const p=_silentAudio.play();if(p&&p.catch)p.catch(function(){});
+  }catch(e){}
+  if(!('speechSynthesis' in window))return;
   try{
     const u=new SpeechSynthesisUtterance(' ');
     u.volume=0;u.lang='ko-KR';if(koVoice)u.voice=koVoice;
@@ -1557,13 +1574,27 @@ function unlockTTS(){
 }
 document.addEventListener('touchstart',unlockTTS,{passive:true});
 document.addEventListener('click',unlockTTS,true);
+/* 微信内置浏览器：顶部提示用系统浏览器打开（微信禁自动播放+WebSocket 音频受限） */
+if(IS_WECHAT){
+  try{
+    const bar=document.createElement('div');
+    bar.id='wx-tip';
+    bar.style.cssText='position:fixed;top:0;left:0;right:0;z-index:999;background:#07C160;color:#fff;font-size:12px;padding:8px 14px;text-align:center;line-height:1.6';
+    bar.innerHTML='📢 微信内播放音频受限：请点右上角「⋯」→ 在浏览器打开，即可正常发音';
+    document.body.appendChild(bar);
+    setTimeout(function(){
+      const b=document.getElementById('wx-tip');
+      if(b){b.style.opacity='0';b.style.transition='opacity .6s';setTimeout(()=>{if(b.parentNode)b.parentNode.removeChild(b);},700);}
+    },6000);
+  }catch(e){}
+}
 
 /* ---- 在线发音降级：系统无韩语 TTS 引擎时（如小米 HyperOS），自动改用网络韩语发音 ----
    主引擎：微软 Edge TTS 免费节点（国内可直连，无需任何 API Key / 安装）
    备选：Google / 百度 HTTP 接口 */
 const EDGE_TOKEN='6A5AA1D4EAFF4E9FB37E23D68491D6F4';
 const EDGE_VER='1-130.0.2849.68';
-let netAudio=null,netQue=[],netBusy=false,netWsFail=false;
+let netAudio=null,netQue=[],netBusy=false,netWsFail=false,_acCtx=null,_silentAudio=null;
 function uuidv4(){
   try{return (crypto.randomUUID?crypto.randomUUID():([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,c=>(c^crypto.getRandomValues(new Uint8Array(1))[0]&15>>c/4).toString(16)));}
   catch(e){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16);});}
@@ -1778,6 +1809,8 @@ function netPlayNext(){
 function speak(text){
   if(!text)return;
   if(store.set.ttsMode===1){sysSpeak(text);return;}
+  // 微信内置浏览器：WebSocket 音频常被静音/阻断，直接走系统语音（有韩语包时）
+  if(IS_WECHAT&&koVoice&&('speechSynthesis' in window)){sysSpeak(text);return;}
   netSpeak(text);
 }
 function sysSpeak(text){
