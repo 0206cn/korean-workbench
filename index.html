@@ -1843,8 +1843,8 @@ function speak(text){
   if(store.set.ttsMode===1){sysSpeak(text);return;}
   // 微信内置浏览器：WebSocket 音频常被静音/阻断，直接走系统语音（有韩语包时）
   if(IS_WECHAT&&koVoice&&('speechSynthesis' in window)){sysSpeak(text);return;}
-  // 手机浏览器：Edge wss 常被网络/内核限制，直接走国内可直连的百度 TTS（audio 播放无需 CORS）
-  if(IS_MOBILE&&netWsFail){
+  // 手机：Edge wss 在国内手机网络常受限 → 直接走国内可直连的百度 TTS（audio 播放无需 CORS）
+  if(IS_MOBILE||netWsFail){
     netHttpFallback(text,function(){});
     return;
   }
