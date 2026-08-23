@@ -1709,20 +1709,22 @@ function playEdgeAudio(b64,cb){
     if(!netAudio)netAudio=new Audio();
     const url=URL.createObjectURL(new Blob([bytes],{type:'audio/mpeg'}));
     netAudio.src=url;
-    const fin=function(ok){try{URL.revokeObjectURL(url);}catch(e){}if(ok!==false)cb(true);};
+    const fin=function(ok){try{URL.revokeObjectURL(url);}catch(e){}if(ok===false)netWsFail=true;cb(ok!==false);};
     netAudio.onended=function(){fin(true);};
     netAudio.onerror=function(){fin(false);};
     const p=netAudio.play();
     if(p&&p.catch)p.catch(function(){ // 自动播放被拒 → 再尝试一次（已解锁过应成功）
       try{const p2=netAudio.play();if(p2&&p2.catch)p2.catch(function(){fin(false);});}catch(e){fin(false);}
     });
-  }catch(e){cb(false);}
+  }catch(e){netWsFail=true;cb(false);}
 }
 function netHttpFallback(t,cb){
+  unlockTTS();
   if(!netAudio){try{netAudio=new Audio();}catch(e){cb(false);return;}}
+  // 国内可直连优先（百度），境外 Google 兜底
   const urls=[
-    'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=ko&q='+encodeURIComponent(t),
-    'https://fanyi.baidu.com/gettts?lan=kor&text='+encodeURIComponent(t)+'&spd=3&source=web'
+    'https://fanyi.baidu.com/gettts?lan=kor&text='+encodeURIComponent(t)+'&spd=3&source=web',
+    'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=ko&q='+encodeURIComponent(t)
   ];
   let i=0,timer=0;
   const tryPlay=function(){
@@ -1735,7 +1737,8 @@ function netHttpFallback(t,cb){
     netAudio.onerror=function(){netAudio.onerror=null;clearTimeout(timer);next();};
     netAudio.onended=function(){netAudio.onended=null;clearTimeout(timer);cb(true);};
     netAudio.src=urls[i];
-    netAudio.play().catch(function(){clearTimeout(timer);next();});
+    const p=netAudio.play();
+    if(p&&p.catch)p.catch(function(){clearTimeout(timer);next();});
   };
   const next=function(){i++;if(i<urls.length)tryPlay();else cb(false);};
   tryPlay();
@@ -1793,18 +1796,19 @@ function netPlayNext(){
   };
   guard=setTimeout(()=>doneOne(false),8000); // 兜底：任一环节 8 秒无响应强制跳过，保证队列不卡死
   const httpWrap=function(ok){if(tk!==_playToken)return;doneOne(ok);};
-  // Edge 已知不可用（上次失败）：不再干等，立即用系统韩语语音兜底（零延迟），后台每 30 秒自动重连 Edge
+  // Edge 已知不可用（上次失败）：不再干等，立即兜底，后台每 30 秒自动重连 Edge
   if(netWsFail){
     if(koVoice)sysSpeakFallback(t);
-    doneOne(false);
+    else netHttpFallback(t,httpWrap); // 无系统韩语语音 → 用国内可直连的 HTTP TTS 兜底
     return;
   }
   edgeTts(t,function(audio){
     if(tk!==_playToken)return; // 本请求已被跳过/取代，迟到音频丢弃
     if(!audio){
-      // Edge 在线失败：改系统韩语语音兜底（不混声）；30 秒后自动重连恢复 Edge
+      // Edge 在线失败：系统韩语语音优先，否则国内 HTTP TTS 兜底；30 秒后自动重连恢复 Edge
       netWsFail=true;
-      sysSpeakFallback(t);
+      if(koVoice)sysSpeakFallback(t);
+      else netHttpFallback(t,httpWrap);
       doneOne(false);
       return;
     }
