@@ -1749,10 +1749,11 @@ function netHttpFallback(t,cb){
   playOne();
 }
 function httpSpeakOne(t,cb){
-  // 国内可直连的韩语 TTS。源顺序：有道（加载稳定）→ 百度（能读整句）→ Google（兜底）。
-  // 播放：优先用 AudioContext+MediaElementSource 接管 <audio>，绕开小米等浏览器对
-  // HTMLAudioElement 的跨域静音策略（MediaElementSource 实时播放无需 CORS）。
+  // 发音源：
+  // ① 同源 /tts 代理（本地服务器模式：服务端转发，音频同源 → 解决小米浏览器跨域静音）
+  // ② 有道（加载稳定）③ 百度（能读整句）④ Google（兜底）
   const urls=[
+    location.origin+'/tts?text='+encodeURIComponent(t),
     'https://dict.youdao.com/dictvoice?audio='+encodeURIComponent(t)+'&type=2',
     'https://fanyi.baidu.com/gettts?lan=kor&text='+encodeURIComponent(t)+'&spd=3&source=web',
     'https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=ko&q='+encodeURIComponent(t)
@@ -1771,22 +1772,8 @@ function httpSpeakOne(t,cb){
     netAudio.onended=function(){if(done)return;done=true;clearTimeout(timer);cb(true);};
     netAudio.src=urls[i];
     netAudio.load();
-    // 手势栈内立即 play；同时尝试用 AudioContext 接管绕过静音
-    const p=netAudio.play();
+    const p=netAudio.play(); // 手势栈内立即 play
     if(p&&p.catch)p.catch(function(){try{netAudio.pause();}catch(e){}next();});
-    // MediaElementSource 接管（若成功，音频经 AudioContext 输出，不受 HTMLAudioElement 静音影响）
-    try{
-      if(!_acCtx&&(window.AudioContext||window.webkitAudioContext)){
-        const AC=window.AudioContext||window.webkitAudioContext;
-        _acCtx=new AC();
-      }
-      if(_acCtx&&_acCtx.state==='suspended'){try{_acCtx.resume();}catch(e){}}
-      if(_acCtx&&!netAudio._wired){
-        netAudio._wired=true;
-        const srcNode=_acCtx.createMediaElementSource(netAudio);
-        srcNode.connect(_acCtx.destination);
-      }
-    }catch(e){}
   };
   const next=function(){i++;if(i<urls.length)tryOne();else fail();};
   tryOne();
