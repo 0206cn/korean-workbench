@@ -1,0 +1,15 @@
+{
+  "name": "韩语学习App",
+  "short_name": "韩语学习",
+  "description": "TOPIK 5720 词韩语学习工具：三关学习、默写、复习、生词本、例句词形拆解",
+  "lang": "zh-CN",
+  "start_url": "./韩语学习App.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0F0F12",
+  "theme_color": "#0F0F12",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
