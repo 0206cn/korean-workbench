@@ -1877,9 +1877,7 @@ function loadStore(){
   try{store=JSON.parse(localStorage.getItem(LSKEY))||null;}catch(e){store=null;}
   if(!store)store={ver:DATA_VER,p:{},master:[],log:{date:'',newDone:0,today:[],todayMap:{},review:[],reviewMap:{}},set:{daily:10,rate:1,ttsMode:0,voice:'ko-KR-SunHiNeural',syncDir:'cloud',theme:'auto',pendFirst:true},st:{right:0,wrong:0}};
   // 词库已更换（id 体系不同）→ 学习进度重置，仅保留设置
-  if(store.ver!==DATA_VER){
-    store.p={};store.master=[];store.log={date:todayStr(),newDone:0,today:[],todayMap:{},review:[],reviewMap:{}};store.st={right:0,wrong:0};store.ver=DATA_VER;
-  }
+  if(store.ver!==DATA_VER){ store.ver=DATA_VER; store.p=store.p||{}; store.master=store.master||[]; store.log=Object.assign({date:"",newDone:0,today:[],todayMap:{},review:[],reviewMap:{}},store.log||{}); store.st=Object.assign({right:0,wrong:0},store.st||{}); }
   // 容错补丁：只补齐缺失字段，绝不覆盖已有学习进度 store.p / store.master
   store.set=Object.assign({daily:10,rate:1,ttsMode:0,voice:'ko-KR-SunHiNeural',syncDir:'cloud',theme:'auto',pendFirst:true},store.set||{});
   if(store.set.syncDir!=='local')store.set.syncDir='cloud'; // 同步基准：cloud=以云端为准（主小程序）| local=以本机为准（主电脑）
